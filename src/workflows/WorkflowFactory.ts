@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as yaml from 'js-yaml';
 import { DataSource } from 'typeorm';
 import { Workflow } from '../models/Workflow';
-import { Task } from '../models/Task';
+import { Task, TaskType } from '../models/Task';
 import {TaskStatus} from "../workers/taskRunner";
 
 export enum WorkflowStatus {
@@ -15,6 +15,7 @@ export enum WorkflowStatus {
 interface WorkflowStep {
     taskType: string;
     stepNumber: number;
+    dependsOn?: string[];
 }
 
 interface WorkflowDefinition {
@@ -49,11 +50,27 @@ export class WorkflowFactory {
             task.clientId = clientId;
             task.geoJson = geoJson;
             task.status = TaskStatus.Queued;
-            task.taskType = step.taskType;
+            task.taskType = step.taskType as TaskType;
             task.stepNumber = step.stepNumber;
             task.workflow = savedWorkflow;
+            task.dependsOn = [];
+            task.dependents = [];
             return task;
         });
+
+        for (const task of tasks) {
+            const dependsOn = workflowDef.steps.find(step => step.taskType === task.taskType)?.dependsOn;
+            if (dependsOn) {
+                task.dependsOn = tasks.filter(t => dependsOn.includes(t.taskType));
+                // Don't set up bidirectional relationships here to avoid duplicates
+                // The dependents will be automatically managed by TypeORM
+            }
+        }
+
+        const circularDependencies = tasks.filter(t1 => t1.dependsOn.some(t2 => t2.dependsOn.some(t3 => t3.taskType === t2.taskType)));
+        if (circularDependencies.length > 0) {
+            throw new Error(`Circular dependencies found: ${circularDependencies.map(t => t.taskType).join(', ')}`);
+        }
 
         await taskRepository.save(tasks);
 

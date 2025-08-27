@@ -9,13 +9,21 @@ export async function taskWorker() {
     while (true) {
         const task = await taskRepository.findOne({
             where: { status: TaskStatus.Queued },
-            relations: ['workflow'] // Ensure workflow is loaded
+            order: { requeuedAt: 'ASC' },
+            relations: ['workflow', 'dependsOn', 'dependents'] // Ensure workflow is loaded
         });
 
         if (task) {
             try {
-                await taskRunner.run(task);
+                const hasCompletedDependencies = task.dependsOn.every(t => t.status === TaskStatus.Completed);
+                if (!hasCompletedDependencies) {
+                    console.log(`Task ${task.taskId} has not completed dependencies. Skipping...`);
+                    task.requeuedAt = new Date();
+                    await taskRepository.save(task);
+                    continue;
+                }
 
+                await taskRunner.run(task);
             } catch (error) {
                 console.error('Task execution failed. Task status has already been updated by TaskRunner.');
                 console.error(error);

@@ -14,7 +14,7 @@ export enum TaskStatus {
 
 export class TaskRunner {
     constructor(
-        private taskRepository: Repository<Task>,
+        private readonly taskRepository: Repository<Task>,
     ) {}
 
     /**
@@ -31,7 +31,18 @@ export class TaskRunner {
         try {
             console.log(`Starting job ${task.taskType} for task ${task.taskId}...`);
             const resultRepository = this.taskRepository.manager.getRepository(Result);
-            const taskResult = await job.run(task);
+            
+            // Find results of tasks in task.dependsOn
+            let dependencyResults: Result[] = [];
+            if (task.dependsOn && task.dependsOn.length > 0) {
+                const dependencyTaskIds = task.dependsOn.map(depTask => depTask.taskId);
+                dependencyResults = await resultRepository.find({
+                    where: dependencyTaskIds.map(taskId => ({ taskId }))
+                });
+                console.log(`Found ${dependencyResults.length} dependency results for task ${task.taskId}`);
+            }
+            
+            const taskResult = await job.run(task, dependencyResults);
             console.log(`Job ${task.taskType} for task ${task.taskId} completed successfully.`);
             const result = new Result();
             result.taskId = task.taskId!;
@@ -47,6 +58,13 @@ export class TaskRunner {
 
             task.status = TaskStatus.Failed;
             task.progress = null;
+            if (error?.message) {
+                task.errorMessage = error.message;
+            } else if (typeof error === "string") {
+                task.errorMessage = error;
+            } else {
+                task.errorMessage = "Unknown error";
+            }
             await this.taskRepository.save(task);
 
             throw error;
